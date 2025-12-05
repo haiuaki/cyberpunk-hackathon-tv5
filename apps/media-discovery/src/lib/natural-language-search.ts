@@ -4,10 +4,9 @@
  */
 
 import { generateObject, generateText } from 'ai';
-import { openai } from '@ai-sdk/openai';
-import { google } from '@ai-sdk/google';
+import { google } from '@/lib/google-ai';
 import { z } from 'zod';
-import type { SemanticSearchQuery, SearchIntent, SearchFilters, MediaContent, SearchResult } from '@/types/media';
+import type { SemanticSearchQuery, SearchIntent, SearchFilters, MediaContent, SearchResult, TasteProfile } from '@/types/media';
 import { searchMulti, getSimilarMovies, getSimilarTVShows, discoverMovies, discoverTVShows } from './tmdb';
 import { searchByEmbedding, getContentEmbedding, calculateSimilarity } from './vector-search';
 
@@ -78,7 +77,7 @@ export async function parseSearchQuery(query: string): Promise<SemanticSearchQue
     console.log(`🧠 AI parsing intent for: "${query.slice(0, 30)}..."`);
     // Use AI to extract intent from natural language
     const { object: intent } = await generateObject({
-      model: openai('gpt-4o-mini'),
+      model: google.chat('models/gemini-1.5-flash-latest'),
       schema: SearchIntentSchema,
       prompt: `Analyze this movie/TV show search query and extract the user's intent:
 
@@ -134,7 +133,7 @@ Be specific and extract as much relevant information as possible.`,
  */
 export async function semanticSearch(
   query: string,
-  userPreferences?: number[]
+  tasteProfile?: TasteProfile
 ): Promise<SearchResult[]> {
   // Parse the natural language query
   const semanticQuery = await parseSearchQuery(query);
@@ -146,7 +145,7 @@ export async function semanticSearch(
   ]);
 
   // Merge and rank results
-  const mergedResults = mergeAndRankResults(tmdbResults, vectorResults, semanticQuery, userPreferences);
+  const mergedResults = mergeAndRankResults(tmdbResults, vectorResults, semanticQuery, tasteProfile);
 
   return mergedResults;
 }
@@ -288,7 +287,7 @@ function mergeAndRankResults(
   tmdbResults: SearchResult[],
   vectorResults: SearchResult[],
   query: SemanticSearchQuery,
-  userPreferences?: number[]
+  tasteProfile?: TasteProfile
 ): SearchResult[] {
   // Combine results, deduplicating by ID
   const resultMap = new Map<string, SearchResult>();
@@ -352,15 +351,41 @@ function mergeAndRankResults(
     });
   }
 
-  // Apply user preference boost
-  if (userPreferences?.length) {
+  // Apply taste profile boost
+  if (tasteProfile) {
+    const preferredGenreIds = tasteProfile.genres?.flatMap(g => {
+        const mapping = GENRE_MAP[g.toLowerCase()];
+        return mapping ? [mapping.movie, mapping.tv] : [];
+    }).filter(Boolean) || [];
+
     results = results.map(result => {
-      const genreMatch = result.content.genreIds.some(id => userPreferences.includes(id));
-      if (genreMatch) {
+      let boost = 0;
+      const newMatchReasons: string[] = [];
+
+      // Genre match
+      if (preferredGenreIds.some(id => result.content.genreIds.includes(id))) {
+        boost += 0.15;
+        newMatchReasons.push('Matches your taste');
+      }
+
+      const overviewLower = result.content.overview.toLowerCase();
+      // Theme match
+      if (tasteProfile.themes?.some(theme => overviewLower.includes(theme.toLowerCase()))) {
+        boost += 0.1;
+        newMatchReasons.push('Matches your taste');
+      }
+      
+      // Mood match
+      if (tasteProfile.moods?.some(mood => overviewLower.includes(mood.toLowerCase()))) {
+        boost += 0.1;
+        newMatchReasons.push('Matches your taste');
+      }
+
+      if (boost > 0) {
         return {
           ...result,
-          relevanceScore: Math.min(1, result.relevanceScore + 0.1),
-          matchReasons: [...result.matchReasons, 'Matches your preferences'],
+          relevanceScore: Math.min(1, result.relevanceScore + boost),
+          matchReasons: [...result.matchReasons, ...newMatchReasons],
         };
       }
       return result;
@@ -387,7 +412,7 @@ export async function explainRecommendation(
 ): Promise<string> {
   try {
     const { text } = await generateText({
-      model: openai('gpt-4o-mini'),
+      model: google.chat('models/gemini-1.5-flash-latest'),
       prompt: `Generate a brief, engaging explanation for why "${content.title}" was recommended to a user who searched for: "${userQuery}"
 
 Match reasons: ${matchReasons.join(', ')}

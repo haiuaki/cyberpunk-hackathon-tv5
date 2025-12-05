@@ -9,19 +9,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { semanticSearch, parseSearchQuery, explainRecommendation } from '@/lib/natural-language-search';
 
+// Define the schema for the taste profile
+const TasteProfileSchema = z.object({
+  genres: z.array(z.string()).optional(),
+  themes: z.array(z.string()).optional(),
+  moods: z.array(z.string()).optional(),
+}).optional();
+
 // Request schema
 const SearchRequestSchema = z.object({
   query: z.string().min(1).max(500),
-  filters: z.object({
-    mediaType: z.enum(['movie', 'tv', 'all']).optional(),
-    genres: z.array(z.number()).optional(),
-    yearRange: z.object({
-      min: z.number().optional(),
-      max: z.number().optional(),
-    }).optional(),
-    ratingMin: z.number().min(0).max(10).optional(),
-  }).optional(),
-  preferences: z.array(z.number()).optional(), // User's preferred genre IDs
+  tasteProfile: TasteProfileSchema,
   explain: z.boolean().optional(), // Whether to include AI explanations
   limit: z.number().min(1).max(50).optional(),
 });
@@ -29,10 +27,10 @@ const SearchRequestSchema = z.object({
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { query, filters, preferences, explain, limit = 20 } = SearchRequestSchema.parse(body);
+    const { query, tasteProfile, explain, limit = 20 } = SearchRequestSchema.parse(body);
 
     // Perform semantic search
-    const results = await semanticSearch(query, preferences);
+    const results = await semanticSearch(query, tasteProfile);
 
     // Apply limit
     const limitedResults = results.slice(0, limit);
@@ -79,32 +77,30 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// GET endpoint for simple text searches
+// GET endpoint now uses the POST logic for consistency
 export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const query = searchParams.get('q');
+    const searchParams = request.nextUrl.searchParams;
+    const query = searchParams.get('q');
 
-  if (!query) {
-    return NextResponse.json(
-      { success: false, error: 'Query parameter "q" is required' },
-      { status: 400 }
-    );
-  }
+    if (!query) {
+        return NextResponse.json(
+            { success: false, error: 'Query parameter "q" is required' },
+            { status: 400 }
+        );
+    }
+    
+    // We can't get a taste profile from a GET request, so we pass null.
+    const mockRequest = {
+        json: async () => ({
+            query: query,
+            tasteProfile: null
+        })
+    } as NextRequest;
+    
+    // This is a workaround to reuse the POST logic. 
+    // In a real app, you might consider refactoring the core logic out of the POST handler.
+    const postResponse = await POST(mockRequest);
+    const data = await postResponse.json();
 
-  try {
-    const results = await semanticSearch(query);
-
-    return NextResponse.json({
-      success: true,
-      query,
-      results: results.slice(0, 20),
-      totalResults: results.length,
-    });
-  } catch (error) {
-    console.error('Search error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Search failed' },
-      { status: 500 }
-    );
-  }
+    return NextResponse.json(data);
 }

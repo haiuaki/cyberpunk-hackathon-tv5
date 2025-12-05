@@ -8,6 +8,12 @@ import { SearchBar } from '@/components/SearchBar';
 import { MediaCard } from '@/components/MediaCard';
 import type { SearchResult } from '@/types/media';
 
+interface TasteProfile {
+  genres?: string[];
+  themes?: string[];
+  moods?: string[];
+}
+
 interface SearchResponse {
   success: boolean;
   query: string;
@@ -20,8 +26,14 @@ interface SearchResponse {
   totalResults: number;
 }
 
-async function fetchSearchResults(query: string): Promise<SearchResponse> {
-  const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+async function fetchSearchResults(query: string, tasteProfile: TasteProfile | null): Promise<SearchResponse> {
+  const response = await fetch('/api/search', {
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query, tasteProfile }),
+  });
   if (!response.ok) throw new Error('Search failed');
   return response.json();
 }
@@ -29,10 +41,24 @@ async function fetchSearchResults(query: string): Promise<SearchResponse> {
 function SearchResults() {
   const searchParams = useSearchParams();
   const query = searchParams.get('q') || '';
+  
+  // Retrieve taste profile from session storage
+  let tasteProfile: TasteProfile | null = null;
+  if (typeof window !== 'undefined') {
+    const storedProfile = sessionStorage.getItem('tasteProfile');
+    if (storedProfile) {
+      try {
+        tasteProfile = JSON.parse(storedProfile);
+      } catch (e) {
+        console.error("Failed to parse taste profile from session storage", e);
+      }
+    }
+  }
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['search', query],
-    queryFn: () => fetchSearchResults(query),
+    // Include tasteProfile in the queryKey to ensure uniqueness
+    queryKey: ['search', query, tasteProfile],
+    queryFn: () => fetchSearchResults(query, tasteProfile),
     enabled: !!query,
   });
 
